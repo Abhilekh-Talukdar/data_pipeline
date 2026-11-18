@@ -1,8 +1,9 @@
-import importlib
+import importlib.util
+from pathlib import Path
 import sys
 import types
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 def _identity_decorator(function=None, **_kwargs):
@@ -11,29 +12,39 @@ def _identity_decorator(function=None, **_kwargs):
     return function
 
 
-# The pipeline runs inside Mage. Stub its decorators and external data libraries
-# so these unit tests can exercise the loader without installing Mage or pandas.
-pandas_stub = types.ModuleType('pandas')
-pandas_stub.read_csv = Mock(name='read_csv')
-requests_stub = types.ModuleType('requests')
-requests_stub.get = Mock(name='get')
-mage_stub = types.ModuleType('mage_ai')
-mage_stub.__path__ = []
-data_preparation_stub = types.ModuleType('mage_ai.data_preparation')
-data_preparation_stub.__path__ = []
-decorators_stub = types.ModuleType('mage_ai.data_preparation.decorators')
-decorators_stub.data_loader = _identity_decorator
-decorators_stub.test = _identity_decorator
+def _load_extract_module():
+    # The pipeline runs inside Mage. Stub Mage and data libraries so the loader
+    # can be tested without installing Mage, pandas, or making network requests.
+    pandas_stub = types.ModuleType('pandas')
+    pandas_stub.read_csv = Mock(name='read_csv')
+    requests_stub = types.ModuleType('requests')
+    requests_stub.get = Mock(name='get')
+    mage_stub = types.ModuleType('mage_ai')
+    mage_stub.__path__ = []
+    data_preparation_stub = types.ModuleType('mage_ai.data_preparation')
+    data_preparation_stub.__path__ = []
+    decorators_stub = types.ModuleType('mage_ai.data_preparation.decorators')
+    decorators_stub.data_loader = _identity_decorator
+    decorators_stub.test = _identity_decorator
 
-sys.modules.update({
-    'pandas': pandas_stub,
-    'requests': requests_stub,
-    'mage_ai': mage_stub,
-    'mage_ai.data_preparation': data_preparation_stub,
-    'mage_ai.data_preparation.decorators': decorators_stub,
-})
+    modules = {
+        'pandas': pandas_stub,
+        'requests': requests_stub,
+        'mage_ai': mage_stub,
+        'mage_ai.data_preparation': data_preparation_stub,
+        'mage_ai.data_preparation.decorators': decorators_stub,
+    }
+    source = Path(__file__).resolve().parents[1] / 'extract.py'
 
-extract = importlib.import_module('extract')
+    with patch.dict(sys.modules, modules):
+        spec = importlib.util.spec_from_file_location('extract_under_test', source)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+    return module
+
+
+extract = _load_extract_module()
 
 
 class LoadDataFromApiTests(unittest.TestCase):
